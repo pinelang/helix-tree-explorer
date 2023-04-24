@@ -677,6 +677,11 @@ impl Component for Explorer {
         }
         let key_event = match event {
             Event::Key(event) => event,
+            Event::Mouse(event) => {
+                return self
+                    .tree
+                    .handle_event(&Event::Mouse(*event), cx, &mut self.state)
+            }
             Event::Resize(..) => return EventResult::Consumed(None),
             _ => return EventResult::Ignored(None),
         };
@@ -721,6 +726,7 @@ impl Component for Explorer {
             cx.editor.set_error("explorer render area is too small");
             return;
         }
+
         let config = &cx.editor.config().explorer;
         let position = config.position;
         self.render_embed(area, surface, cx, &position);

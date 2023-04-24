@@ -1,7 +1,10 @@
 use std::cmp::Ordering;
 
 use anyhow::Result;
-use helix_view::theme::Modifier;
+use helix_view::{
+    input::{MouseEvent, MouseEventKind},
+    theme::Modifier,
+};
 
 use crate::{
     compositor::{Component, Context, EventResult},
@@ -291,6 +294,10 @@ pub struct TreeView<T: TreeViewItem> {
     count: usize,
     tree_symbol_style: String,
 
+    /// For handling mouse events
+    rendered_lines: Option<Vec<RenderedLine>>,
+    area: Rect,
+
     #[allow(clippy::type_complexity)]
     pre_render: Option<Box<dyn Fn(&mut Self, Rect) + 'static>>,
 
@@ -325,6 +332,8 @@ impl<T: TreeViewItem> TreeView<T> {
             on_next_key: None,
             search_prompt: None,
             search_str: "".into(),
+            rendered_lines: None,
+            area: Rect::new(0, 0, 0, 0),
         })
     }
 
@@ -775,6 +784,7 @@ struct RenderedLine {
     content: String,
     selected: bool,
     is_ancestor_of_current_item: bool,
+    index: usize,
 }
 struct RenderTreeParams<'a, T> {
     tree: &'a Tree<T>,
@@ -811,6 +821,7 @@ fn render_tree<T: TreeViewItem>(
         selected: selected == tree.index,
         is_ancestor_of_current_item: selected != tree.index && tree.get(selected).is_some(),
         content: name,
+        index: tree.index,
     };
     let prefix = format!("{}{}", prefix, if level == 0 { "" } else { "  " });
     vec![head]
@@ -834,6 +845,7 @@ impl<T: TreeViewItem + Clone> TreeView<T> {
         surface: &mut Surface,
         cx: &mut Context,
     ) {
+        self.area = area;
         let style = cx.editor.theme.get(&self.tree_symbol_style);
         if let Some((_, prompt)) = self.search_prompt.as_mut() {
             prompt.render_prompt(prompt_area, surface, cx)
@@ -848,7 +860,9 @@ impl<T: TreeViewItem + Clone> TreeView<T> {
             }
         };
 
-        let iter = self.render_lines(area).into_iter().enumerate();
+        let rendered_lines = self.render_lines(area);
+
+        let iter = rendered_lines.iter().enumerate();
 
         for (index, line) in iter {
             let area = Rect::new(area.x, area.y.saturating_add(index as u16), area.width, 1);
@@ -882,6 +896,8 @@ impl<T: TreeViewItem + Clone> TreeView<T> {
                 },
             );
         }
+
+        self.rendered_lines = Some(rendered_lines)
     }
 
     #[cfg(test)]
@@ -1042,30 +1058,25 @@ impl<T: TreeViewItem + Clone> TreeView<T> {
         Ok(())
     }
 
-    pub fn handle_event(
+    fn handle_key_event(
         &mut self,
-        event: &Event,
+        event: &KeyEvent,
         cx: &mut Context,
         params: &mut T::Params,
     ) -> EventResult {
-        let key_event = match event {
-            Event::Key(event) => event,
-            Event::Resize(..) => return EventResult::Consumed(None),
-            _ => return EventResult::Ignored(None),
-        };
         (|| -> Result<EventResult> {
             if let Some(mut on_next_key) = self.on_next_key.take() {
-                on_next_key(cx, self, key_event)?;
+                on_next_key(cx, self, event)?;
                 return Ok(EventResult::Consumed(None));
             }
 
-            if let EventResult::Consumed(c) = self.handle_search_event(key_event, cx) {
+            if let EventResult::Consumed(c) = self.handle_search_event(event, cx) {
                 return Ok(EventResult::Consumed(c));
             }
 
             let count = std::mem::replace(&mut self.count, 0);
 
-            match key_event {
+            match event {
                 key!(i @ '0'..='9') => {
                     self.count = i.to_digit(10).unwrap_or(0) as usize + count * 10
                 }
@@ -1125,6 +1136,59 @@ impl<T: TreeViewItem + Clone> TreeView<T> {
             cx.editor.set_error(format!("{err}"));
             EventResult::Consumed(None)
         })
+    }
+
+    pub fn handle_mouse_event(
+        &mut self,
+        event: &MouseEvent,
+        cx: &mut Context,
+        params: &mut T::Params,
+    ) -> EventResult {
+        let MouseEvent {
+            kind, row, column, ..
+        } = *event;
+
+        if !self.area.intersects(Rect::new(column, row, 1, 1)) {
+            return EventResult::Ignored(None);
+        }
+
+        let rendered_lines = match &self.rendered_lines {
+            Some(lines) => lines,
+            None => return EventResult::Consumed(None),
+        };
+
+        let index = rendered_lines
+            .get((row - self.area.y) as usize)
+            .map(|l| l.index);
+
+        match (kind, index) {
+            (MouseEventKind::Down(_), Some(index)) => {
+                self.set_selected(index);
+
+                self.on_enter(cx, params, index).unwrap_or_else(|err| {
+                    cx.editor.set_error(format!("{err}"));
+                });
+            }
+            (MouseEventKind::ScrollDown, _) => self.move_down(1),
+            (MouseEventKind::ScrollUp, _) => self.move_up(1),
+            _ => return EventResult::Consumed(None),
+        };
+
+        EventResult::Consumed(None)
+    }
+
+    pub fn handle_event(
+        &mut self,
+        event: &Event,
+        cx: &mut Context,
+        params: &mut T::Params,
+    ) -> EventResult {
+        match event {
+            Event::Key(event) => self.handle_key_event(event, cx, params),
+            Event::Mouse(event) => self.handle_mouse_event(event, cx, params),
+            Event::Resize(..) => EventResult::Consumed(None),
+            _ => EventResult::Ignored(None),
+        }
     }
 
     fn handle_search_event(&mut self, event: &KeyEvent, cx: &mut Context) -> EventResult {
