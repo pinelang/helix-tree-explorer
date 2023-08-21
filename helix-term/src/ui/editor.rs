@@ -1409,7 +1409,8 @@ impl Component for EditorView {
             editor_area
         };
 
-        let editor_area = if let Some(explorer) = &self.explorer {
+        let bufferline_area = area.with_height(1);
+        let (editor_area, bufferline_area) = if let Some(explorer) = &self.explorer {
             let explorer_column_width = if explorer.is_opened() {
                 explorer.column_width().saturating_add(2)
             } else {
@@ -1419,11 +1420,17 @@ impl Component for EditorView {
             // We should have a Dock trait that allows a component to dock to the top/left/bottom/right
             // of another component.
             match config.explorer.position {
-                ExplorerPosition::Left => editor_area.clip_left(explorer_column_width),
-                ExplorerPosition::Right => editor_area.clip_right(explorer_column_width),
+                ExplorerPosition::Left => (
+                    editor_area.clip_left(explorer_column_width),
+                    bufferline_area.clip_left(explorer_column_width),
+                ),
+                ExplorerPosition::Right => (
+                    editor_area.clip_right(explorer_column_width),
+                    bufferline_area.clip_right(explorer_column_width),
+                ),
             }
         } else {
-            editor_area
+            (editor_area, bufferline_area)
         };
 
         // if the terminal size suddenly changed, we need to trigger a resize
@@ -1431,17 +1438,12 @@ impl Component for EditorView {
 
         if let Some(explorer) = self.explorer.as_mut() {
             if !explorer.is_focus() {
-                let area = if use_bufferline {
-                    area.clip_top(1)
-                } else {
-                    area
-                };
                 explorer.render(area, surface, cx);
             }
         }
 
         if use_bufferline {
-            Self::render_bufferline(cx.editor, area.with_height(1), surface);
+            Self::render_bufferline(cx.editor, bufferline_area, surface);
         }
 
         for (view, is_focused) in cx.editor.tree.views() {
@@ -1521,11 +1523,6 @@ impl Component for EditorView {
 
         if let Some(explore) = self.explorer.as_mut() {
             if explore.is_focus() {
-                let area = if use_bufferline {
-                    area.clip_top(1)
-                } else {
-                    area
-                };
                 explore.render(area, surface, cx);
             }
         }
