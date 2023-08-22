@@ -5,8 +5,7 @@ on:
     branches:
       - master
   merge_group:
-  schedule:
-    - cron: '00 01 * * *'
+  workflow_dispatch:
 
 jobs:
   check:
@@ -107,4 +106,3 @@ jobs:
           git diff-files --quiet \
             || (echo "Run 'cargo xtask docgen', commit the changes and push again" \
             && exit 1)
-
